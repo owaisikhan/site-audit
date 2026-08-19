@@ -1,0 +1,14 @@
+{
+  "name": "site-audit",
+  "version": "1.0.0",
+  "description": "Audit any website for the problems that lose a small business enquiries, and draft the outreach email from what it finds.",
+  "type": "module",
+  "bin": { "site-audit": "./audit.js" },
+  "scripts": {
+    "audit": "node audit.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  },
+  "license": "MIT"
+}
