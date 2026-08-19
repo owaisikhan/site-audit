@@ -16,6 +16,10 @@ import {
   checkDeadControls, checkErrors, checkImages, checkMetadata,
   checkMobileOverflow, checkPageWeight, checkSecurity, checkTapTargets,
 } from "./lib/checks.js";
+import {
+  checkCookies, checkCors, checkExposedPaths, checkPasswordSecurity,
+  checkSecurityHeaders, checkVulnerableLibraries,
+} from "./lib/security.js";
 import { htmlReport, outreachEmail, terminalReport } from "./lib/report.js";
 
 const MOBILE = { width: 390, height: 844 };
@@ -32,6 +36,7 @@ function parseArgs(argv) {
     else if (a === "--from") args.from = argv[++i];
     else if (a === "--timeout") args.timeout = Number(argv[++i]);
     else if (a === "--json") args.json = true;
+    else if (a === "--probe") args.probe = true;
     else if (a.startsWith("-")) throw new Error(`Unknown option: ${a}`);
     else rest.push(a);
   }
@@ -61,6 +66,7 @@ function instrument(page) {
       name: decodeURIComponent(res.url().split("/").pop().split("?")[0]) || res.url(),
       bytes: Number.isFinite(bytes) ? bytes : 0,
       type: req.resourceType(),
+      headers: res.headers(),
     });
   });
   page.on("requestfailed", (req) => {
@@ -116,8 +122,37 @@ async function run() {
     const mInstr = instrument(mPage);
 
     const started = Date.now();
-    const response = await mPage.goto(url, { waitUntil: "load", timeout: args.timeout });
+    let response;
+    try {
+      response = await mPage.goto(url, { waitUntil: "load", timeout: args.timeout });
+    } catch (err) {
+      // A certificate error is a finding, not a crash: the visitor sees a full
+      // "your connection is not private" interstitial and most turn back.
+      if (/ERR_CERT|SSL|CERT_/i.test(err.message)) {
+        findings.push({
+          id: "tls-invalid",
+          severity: "high",
+          title: "The site's security certificate is invalid",
+          detail: `    The browser refused to load ${url}:\n    ${err.message}`,
+          why:
+            "Visitors are stopped by a full-page \"your connection is not private\" " +
+            "warning before they see anything, and almost all of them leave. It also " +
+            "means traffic may not actually be encrypted.",
+          evidence: { error: err.message },
+        });
+        stats = { totalBytes: 0, requests: 0, loadMs: Date.now() - started, mobileSeconds: 0 };
+        const partial = { url, host, findings, stats, screenshots: [], checkedAt: new Date().toISOString() };
+        await writeFile(path.join(outDir, "report.html"), htmlReport(partial), "utf8");
+        console.log(terminalReport(partial));
+        console.log(`  report     ${path.join(outDir, "report.html")}`);
+        await mob.close();
+        await browser.close();
+        return;
+      }
+      throw err;
+    }
     const loadMs = Date.now() - started;
+    const mainHeaders = response ? response.headers() : {};
     if (!response) throw new Error("No response from the server");
     if (response.status() >= 400) throw new Error(`Server returned ${response.status()}`);
     // Let lazy assets and any entrance animation settle before measuring.
@@ -135,6 +170,26 @@ async function run() {
     findings.push(...checkErrors(mInstr.failed, dedupe(mInstr.consoleErrors)));
     findings.push(...checkSecurity(url, mInstr.resources));
     findings.push(...checkPageWeight(mInstr.resources));
+
+    // ---- passive security posture (reads what the load already returned) ----
+    findings.push(...checkSecurityHeaders(url, mainHeaders));
+    findings.push(...checkCookies(await mob.cookies(), url));
+    findings.push(...(await checkPasswordSecurity(mPage, url)));
+    findings.push(...(await checkVulnerableLibraries(mPage)));
+    findings.push(...checkCors(mInstr.resources));
+
+    // ---- opt-in path probe: a few extra GETs, only with --probe ------------
+    if (args.probe) {
+      const fetchUrl = async (u) => {
+        try {
+          const res = await mPage.request.get(u, { timeout: 8000, failOnStatusCode: false });
+          return { status: res.status(), body: await res.text().catch(() => "") };
+        } catch {
+          return null;
+        }
+      };
+      findings.push(...(await checkExposedPaths(url, fetchUrl)));
+    }
 
     const totalBytes = mInstr.resources.reduce((s, r) => s + r.bytes, 0);
     stats = {

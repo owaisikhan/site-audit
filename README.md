@@ -59,7 +59,44 @@ findings.json      raw data, with --json
 | Tap targets | Buttons too small to hit with a thumb |
 | Broken requests | 404s and failed loads |
 | JavaScript errors | Scripts throwing, which silently kills everything after them |
-| Security | Plain HTTP, or insecure assets on a secure page |
+| Security headers | Missing HSTS, CSP, clickjacking protection, nosniff, version disclosure |
+| Cookies | Session cookies a script can steal (no HttpOnly), or ride (no SameSite/Secure) |
+| Passwords | Login form that sends the password without encryption |
+| Certificate | Invalid or untrusted TLS certificate |
+| Libraries | Front-end libraries whose version has a known, published vulnerability |
+| CORS | A wide-open policy that lets any site read logged-in responses |
+| Exposed files | (--probe only) A downloadable .git folder or .env file |
+| Transport | Plain HTTP, or insecure assets on a secure page |
+
+## Security checks, and where the line is
+
+The security checks are **passive**. They read what the site already returns on
+a normal load — its headers, its cookies, the library versions it ships, whether
+the login form is encrypted — and report the *conditions* that make an attack
+possible. None of them attack anything.
+
+That is a deliberate and important limit. Actively testing whether a site can be
+broken into — injection payloads, login-bypass attempts, credential guessing — is
+**penetration testing**, and doing it to a site you have not been authorised to
+test is a crime in most countries, however good your intentions. Authorisation is
+the whole difference: a bug-bounty program or a signed contract grants it; a cold
+prospect has not. This tool stays firmly on the passive side of that line so you
+can run it on anyone's public site without crossing it.
+
+If you want to do the active side legitimately, that is what bug-bounty programs
+are for — they publish a scope and a safe-harbour promise, which is your written
+permission. It is a real and respected path; it is just a different activity from
+this.
+
+### --probe
+
+`--probe` makes a handful of extra GET requests to well-known exposure points
+(`/.git/HEAD`, `/.env`). It still only *reads* — it never exploits — but even
+reading another server's files edges toward territory you should only enter on
+sites you are allowed to audit. It is off by default for that reason. An exposed
+`.git` or `.env` is one of the most serious things you can find (it can hand over
+your entire source and your database password), so the check is worth having —
+used responsibly.
 
 ## It is read-only, deliberately
 
